@@ -1,31 +1,37 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   ZoomIn,
   ZoomOut,
   Maximize2,
+  RotateCcw,
   Plus,
   Trash2,
   AlertOctagon,
   X,
+  ChevronDown,
+  HelpCircle,
 } from 'lucide-react';
 import { useNetwork } from '../context/NetworkContext.jsx';
 import { formatBandwidth } from '../utils/calculations.js';
 
 export default function NetworkTopology({
   animatedPacketPos = null, // { x, y, routerId } when packet simulator is running
-  height = '580px',
+  height = '560px',
   allowEdit = true,
 }) {
   const {
     ases,
     routers,
     links,
+    sourceAs,
+    destAs,
     bgpResult,
     selectedElement,
     setSelectedElement,
     toggleLinkStatus,
     updateLinkRelationship,
     updateAsRole,
+    updateRouterPosition,
     deleteRouter,
     deleteLink,
     addRouter,
@@ -35,8 +41,9 @@ export default function NetworkTopology({
   // Zoom & Pan state
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [activeDraggingId, setActiveDraggingId] = useState(null);
+  const [isLegendCollapsed, setIsLegendCollapsed] = useState(false);
 
   // Add Element Dialog states
   const [showAddRouter, setShowAddRouter] = useState(false);
@@ -47,12 +54,23 @@ export default function NetworkTopology({
   const [newLinkTo, setNewLinkTo] = useState('R3');
   const [newLinkRel, setNewLinkRel] = useState('peer-peer');
 
+  const containerRef = useRef(null);
   const svgRef = useRef(null);
+  const pointerStartRef = useRef({ startX: 0, startY: 0, panX: 0, panY: 0, hasMoved: false, target: null });
+  const draggedRouterRef = useRef(null);
 
   // Determine active route router IDs and link IDs
   const bestRoute = bgpResult?.bestRoute;
   const activeRouterIds = new Set(bestRoute?.routerPath || []);
   const activeLinkIds = new Set((bestRoute?.traversedLinks || []).map((l) => l.id));
+
+  // Determine source and destination routers
+  const sourceRouterId =
+    bestRoute?.routerPath?.[0] || routers.find((r) => r.asId === sourceAs)?.id || 'R1';
+  const destRouterId =
+    bestRoute?.routerPath?.[bestRoute.routerPath.length - 1] ||
+    routers.find((r) => r.asId === destAs)?.id ||
+    'R6';
 
   // Determine alternative routes links
   const altLinkIds = new Set();
@@ -62,101 +80,375 @@ export default function NetworkTopology({
       (r.traversedLinks || []).forEach((l) => altLinkIds.add(l.id));
     });
 
-  // Pan handling
-  const handleMouseDown = (e) => {
-    // Only drag if left click and not clicked on an interactive SVG element
-    if (e.button === 0 && e.target.tagName === 'svg' || e.target.id === 'topology-bg') {
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    }
-  };
-
-  const handleMouseMove = (e) => {
-    if (isDragging) {
-      setPan({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
-      });
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  const handleZoom = (delta) => {
-    setZoom((prev) => Math.min(2.5, Math.max(0.5, prev + delta)));
-  };
-
-  const resetView = () => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-  };
-
   // Find router coords lookup
   const routerCoords = new Map();
   routers.forEach((r) => {
     routerCoords.set(r.id, { x: r.x, y: r.y, router: r });
   });
 
+  // Fit to screen calculation: centers and scales all AS containers & routers
+  const fitToScreen = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const width = rect.width || 800;
+    const height = rect.height || 500;
+
+    // Calculate bounding box of all ASes and routers
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    ases.forEach((as) => {
+      minX = Math.min(minX, as.x);
+      maxX = Math.max(maxX, as.x + as.width);
+      minY = Math.min(minY, as.y);
+      maxY = Math.max(maxY, as.y + as.height);
+    });
+
+    routers.forEach((r) => {
+      minX = Math.min(minX, r.x - 50);
+      maxX = Math.max(maxX, r.x + 50);
+      minY = Math.min(minY, r.y - 40);
+      maxY = Math.max(maxY, r.y + 45);
+    });
+
+    if (!isFinite(minX)) {
+      minX = 100;
+      maxX = 1200;
+      minY = 100;
+      maxY = 600;
+    }
+
+    const topologyWidth = maxX - minX;
+    const topologyHeight = maxY - minY;
+    const topologyCenterX = (minX + maxX) / 2;
+    const topologyCenterY = (minY + maxY) / 2;
+
+    // Available viewport space (padding for toolbar at top and legend at bottom)
+    const topPadding = 60; // toolbar
+    const bottomPadding = isLegendCollapsed ? 30 : 68; // legend
+    const sidePadding = 40;
+
+    const availableWidth = Math.max(200, width - sidePadding * 2);
+    const availableHeight = Math.max(200, height - topPadding - bottomPadding);
+
+    // Optimal zoom to fit both dimensions
+    const scaleX = availableWidth / topologyWidth;
+    const scaleY = availableHeight / topologyHeight;
+    const optimalZoom = Math.min(1.15, Math.max(0.42, Math.min(scaleX, scaleY)));
+
+    // Center topology in available area
+    const targetCenterY = topPadding + availableHeight / 2;
+    const targetCenterX = width / 2;
+
+    const targetPanX = Math.round(targetCenterX - topologyCenterX * optimalZoom);
+    const targetPanY = Math.round(targetCenterY - topologyCenterY * optimalZoom);
+
+    setZoom(Math.round(optimalZoom * 100) / 100);
+    setPan({ x: targetPanX, y: targetPanY });
+  }, [ases, routers, isLegendCollapsed]);
+
+  // Reset View to 1:1 scale (centered)
+  const resetToOneToOne = useCallback(() => {
+    const container = containerRef.current;
+    const width = container ? container.clientWidth : 800;
+    const height = container ? container.clientHeight : 500;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    ases.forEach((as) => {
+      minX = Math.min(minX, as.x);
+      maxX = Math.max(maxX, as.x + as.width);
+      minY = Math.min(minY, as.y);
+      maxY = Math.max(maxY, as.y + as.height);
+    });
+
+    const topologyCenterX = (minX + maxX) / 2 || 650;
+    const topologyCenterY = (minY + maxY) / 2 || 350;
+
+    setZoom(1);
+    setPan({
+      x: Math.round(width / 2 - topologyCenterX),
+      y: Math.round(height / 2 - topologyCenterY),
+    });
+  }, [ases]);
+
+  // Auto-fit on initial mount
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fitToScreen();
+    }, 40);
+
+    return () => clearTimeout(timer);
+  }, [fitToScreen]);
+
+  // Zoom with Center Anchor
+  const handleZoom = (delta) => {
+    const container = containerRef.current;
+    const width = container ? container.clientWidth : 800;
+    const height = container ? container.clientHeight : 500;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    setZoom((prev) => {
+      const next = Math.min(2.5, Math.max(0.35, Math.round((prev + delta) * 100) / 100));
+      if (next === prev) return prev;
+
+      setPan((prevPan) => ({
+        x: Math.round(centerX - (centerX - prevPan.x) * (next / prev)),
+        y: Math.round(centerY - (centerY - prevPan.y) * (next / prev)),
+      }));
+      return next;
+    });
+  };
+
+  // Wheel Zoom centered at cursor position
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e) => {
+      e.preventDefault();
+      const rect = container.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+
+      const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
+
+      setZoom((prevZoom) => {
+        const nextZoom = Math.min(2.5, Math.max(0.35, Math.round(prevZoom * zoomFactor * 100) / 100));
+        if (nextZoom === prevZoom) return prevZoom;
+
+        setPan((prevPan) => ({
+          x: Math.round(cursorX - (cursorX - prevPan.x) * (nextZoom / prevZoom)),
+          y: Math.round(cursorY - (cursorY - prevPan.y) * (nextZoom / prevZoom)),
+        }));
+
+        return nextZoom;
+      });
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, []);
+
+  // Pointer Down (Mouse click or Touch start)
+  const handleCanvasPointerDown = (e) => {
+    // Only primary pointer button
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+    // Check if clicked an interactive UI overlay (button, input, select)
+    if (e.target.closest('button, select, input')) return;
+
+    // 1. Check if clicked on a Router Node
+    const routerElement = e.target.closest('[data-router-id]');
+    if (routerElement) {
+      const routerId = routerElement.getAttribute('data-router-id');
+      const routerObj = routers.find((r) => r.id === routerId);
+      if (routerObj) {
+        draggedRouterRef.current = {
+          id: routerId,
+          pointerStartX: e.clientX,
+          pointerStartY: e.clientY,
+          routerStartX: routerObj.x,
+          routerStartY: routerObj.y,
+          hasMoved: false,
+        };
+        setActiveDraggingId(routerId);
+
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {}
+        return;
+      }
+    }
+
+    // 2. Otherwise: Canvas Panning (clicked empty grid, link, or AS bounding box)
+    setIsPanning(true);
+    pointerStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      panX: pan.x,
+      panY: pan.y,
+      hasMoved: false,
+      target: e.target,
+    };
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  // Pointer Move (Mouse move or Touch drag)
+  const handleCanvasPointerMove = (e) => {
+    // Handling Router Node Dragging
+    if (draggedRouterRef.current) {
+      const dr = draggedRouterRef.current;
+      const dx = (e.clientX - dr.pointerStartX) / zoom;
+      const dy = (e.clientY - dr.pointerStartY) / zoom;
+
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        dr.hasMoved = true;
+      }
+
+      const newX = Math.round(dr.routerStartX + dx);
+      const newY = Math.round(dr.routerStartY + dy);
+
+      if (updateRouterPosition) {
+        updateRouterPosition(dr.id, newX, newY);
+      }
+      return;
+    }
+
+    // Handling Canvas Panning
+    if (isPanning) {
+      const dx = e.clientX - pointerStartRef.current.startX;
+      const dy = e.clientY - pointerStartRef.current.startY;
+
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        pointerStartRef.current.hasMoved = true;
+      }
+
+      setPan({
+        x: pointerStartRef.current.panX + dx,
+        y: pointerStartRef.current.panY + dy,
+      });
+    }
+  };
+
+  // Pointer Up / Cancel (Release drag or click)
+  const handleCanvasPointerUp = (e) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    // 1. Router Node release
+    if (draggedRouterRef.current) {
+      const dr = draggedRouterRef.current;
+      if (!dr.hasMoved) {
+        // Selection click
+        const r = routers.find((item) => item.id === dr.id);
+        if (r) setSelectedElement({ type: 'ROUTER', data: r });
+      }
+      draggedRouterRef.current = null;
+      setActiveDraggingId(null);
+      return;
+    }
+
+    // 2. Canvas Pan release
+    if (isPanning) {
+      if (!pointerStartRef.current.hasMoved) {
+        // Was a click, not a pan! Check if user clicked an interactive Link or AS box
+        const linkElement = pointerStartRef.current.target?.closest('[data-link-id]');
+        const asElement = pointerStartRef.current.target?.closest('[data-as-id]');
+
+        if (linkElement) {
+          const linkId = linkElement.getAttribute('data-link-id');
+          const linkObj = links.find((l) => l.id === linkId);
+          if (linkObj) setSelectedElement({ type: 'LINK', data: linkObj });
+        } else if (asElement) {
+          const asId = asElement.getAttribute('data-as-id');
+          const asObj = ases.find((a) => a.id === asId);
+          if (asObj) setSelectedElement({ type: 'AS', data: asObj });
+        }
+      }
+      setIsPanning(false);
+    }
+  };
+
   return (
     <div
+      ref={containerRef}
       style={{
         position: 'relative',
         width: '100%',
         height: height,
+        minHeight: '380px',
         backgroundColor: 'var(--bg-secondary)',
         borderRadius: 'var(--radius-lg)',
         border: '1px solid var(--border-subtle)',
         overflow: 'hidden',
         userSelect: 'none',
+        touchAction: 'none', // Prevents touch conflicts with browser panning
       }}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
     >
       {/* Topology Toolbar */}
       <div
         style={{
           position: 'absolute',
-          top: '16px',
-          left: '16px',
+          top: '14px',
+          left: '14px',
           zIndex: 20,
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
-          backgroundColor: 'rgba(19, 28, 49, 0.85)',
-          backdropFilter: 'blur(8px)',
-          padding: '6px 10px',
+          backgroundColor: 'rgba(15, 23, 42, 0.88)',
+          backdropFilter: 'blur(10px)',
+          padding: '5px 10px',
           borderRadius: 'var(--radius-md)',
           border: '1px solid var(--border-subtle)',
+          boxShadow: 'var(--shadow-md)',
         }}
       >
         <button
           onClick={() => handleZoom(0.15)}
           className="btn btn-sm btn-outline"
-          title="Zoom In"
+          title="Zoom In (+15%)"
           style={{ padding: '4px 8px' }}
         >
-          <ZoomIn size={15} />
+          <ZoomIn size={14} />
         </button>
         <button
           onClick={() => handleZoom(-0.15)}
           className="btn btn-sm btn-outline"
-          title="Zoom Out"
+          title="Zoom Out (-15%)"
           style={{ padding: '4px 8px' }}
         >
-          <ZoomOut size={15} />
-        </button>
-        <button
-          onClick={resetView}
-          className="btn btn-sm btn-outline"
-          title="Reset View"
-          style={{ padding: '4px 8px' }}
-        >
-          <Maximize2 size={15} />
+          <ZoomOut size={14} />
         </button>
 
-        <div style={{ width: '1px', height: '18px', backgroundColor: 'var(--border-subtle)', margin: '0 4px' }} />
+        {/* Current Zoom Indicator */}
+        <span
+          style={{
+            fontSize: '0.72rem',
+            color: 'var(--text-muted)',
+            fontFamily: 'var(--font-mono)',
+            minWidth: '38px',
+            textAlign: 'center',
+            fontWeight: 600,
+          }}
+          title="Current Zoom Level"
+        >
+          {Math.round(zoom * 100)}%
+        </span>
+
+        <button
+          onClick={fitToScreen}
+          className="btn btn-sm btn-outline"
+          title="Fit Network to Viewport"
+          style={{ padding: '4px 8px' }}
+        >
+          <Maximize2 size={14} />
+        </button>
+
+        <button
+          onClick={resetToOneToOne}
+          className="btn btn-sm btn-outline"
+          title="Reset Zoom to 100%"
+          style={{ padding: '4px 8px' }}
+        >
+          <RotateCcw size={14} />
+        </button>
+
+        <div style={{ width: '1px', height: '18px', backgroundColor: 'var(--border-subtle)', margin: '0 2px' }} />
 
         {allowEdit && (
           <>
@@ -164,52 +456,125 @@ export default function NetworkTopology({
               onClick={() => setShowAddRouter(!showAddRouter)}
               className="btn btn-sm btn-secondary"
               title="Add Router"
-              style={{ fontSize: '0.78rem' }}
+              style={{ fontSize: '0.75rem', padding: '4px 8px' }}
             >
-              <Plus size={14} /> Add Router
+              <Plus size={13} /> Add Router
             </button>
             <button
               onClick={() => setShowAddLink(!showAddLink)}
               className="btn btn-sm btn-secondary"
               title="Add Link"
-              style={{ fontSize: '0.78rem' }}
+              style={{ fontSize: '0.75rem', padding: '4px 8px' }}
             >
-              <Plus size={14} /> Add Link
+              <Plus size={13} /> Add Link
             </button>
           </>
         )}
       </div>
 
-      {/* Minimal Legend */}
+      {/* Comprehensive Topology Legend (Collapsible) */}
       <div
         style={{
           position: 'absolute',
           bottom: '12px',
           left: '14px',
+          right: isLegendCollapsed ? 'auto' : '14px',
           zIndex: 20,
-          backgroundColor: 'rgba(17, 24, 39, 0.85)',
-          padding: '5px 12px',
-          borderRadius: 'var(--radius-sm)',
-          border: '1px solid var(--border-subtle)',
-          fontSize: '0.72rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '14px',
-          color: 'var(--text-secondary)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ width: '12px', height: '3px', backgroundColor: '#3b82f6', display: 'inline-block' }} />
-          <span>Active Route</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ width: '12px', height: '3px', backgroundColor: '#64748b', display: 'inline-block' }} />
-          <span>Available Link</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ width: '12px', height: '3px', backgroundColor: '#ef4444', borderTop: '2px dashed #ef4444', display: 'inline-block' }} />
-          <span style={{ color: '#ef4444' }}>Link Down</span>
-        </div>
+        {isLegendCollapsed ? (
+          <button
+            onClick={() => setIsLegendCollapsed(false)}
+            className="btn btn-sm btn-outline"
+            style={{
+              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+              backdropFilter: 'blur(8px)',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '0.72rem',
+              padding: '5px 10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              color: 'var(--text-secondary)',
+              boxShadow: 'var(--shadow-md)',
+            }}
+            title="Expand Topology Legend"
+          >
+            <HelpCircle size={13} color="var(--accent-cyan)" />
+            <span>Show Legend</span>
+          </button>
+        ) : (
+          <div
+            style={{
+              backgroundColor: 'rgba(15, 23, 42, 0.94)',
+              backdropFilter: 'blur(10px)',
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '0.72rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+              color: 'var(--text-secondary)',
+              boxShadow: 'var(--shadow-md)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ width: '14px', height: '3px', backgroundColor: '#2563eb', display: 'inline-block' }} />
+                <span style={{ color: '#f8fafc', fontWeight: 600 }}>Active BGP Path</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ width: '14px', height: '3px', backgroundColor: '#818cf8', display: 'inline-block' }} />
+                <span>Backup / Alt Path</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ width: '14px', height: '3px', backgroundColor: '#10b981', display: 'inline-block' }} />
+                <span>Intra-AS (OSPF Cost)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ width: '14px', height: '3px', backgroundColor: '#a855f7', display: 'inline-block' }} />
+                <span>Customer/Provider</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ width: '14px', height: '3px', backgroundColor: '#ec4899', display: 'inline-block' }} />
+                <span>Settlement-Free Peer</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ width: '14px', height: '3px', borderTop: '2px dashed #ef4444', display: 'inline-block' }} />
+                <span style={{ color: '#ef4444' }}>Link Cut (BGP Withdrawn)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }} />
+                <span style={{ color: '#10b981', fontWeight: 600 }}>Source Router</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#f59e0b', display: 'inline-block' }} />
+                <span style={{ color: '#f59e0b', fontWeight: 600 }}>Destination Router</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setIsLegendCollapsed(true)}
+              className="btn btn-sm btn-outline"
+              style={{
+                fontSize: '0.68rem',
+                padding: '2px 6px',
+                border: 'none',
+                color: 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+              title="Minimize Legend"
+            >
+              <ChevronDown size={13} />
+              <span>Hide</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Interactive SVG Canvas */}
@@ -218,30 +583,37 @@ export default function NetworkTopology({
         id="topology-bg"
         width="100%"
         height="100%"
-        style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-        onMouseDown={handleMouseDown}
+        style={{
+          display: 'block',
+          width: '100%',
+          height: '100%',
+          cursor: isPanning ? 'grabbing' : activeDraggingId ? 'grabbing' : 'grab',
+          touchAction: 'none',
+        }}
+        onPointerDown={handleCanvasPointerDown}
+        onPointerMove={handleCanvasPointerMove}
+        onPointerUp={handleCanvasPointerUp}
+        onPointerCancel={handleCanvasPointerUp}
       >
         <defs>
           {/* Subtle Grid Pattern */}
           <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
             <path d="M 30 0 L 0 0 0 30" fill="none" stroke="rgba(255, 255, 255, 0.025)" strokeWidth="1" />
           </pattern>
-
-          {/* Glowing Filter for Selected Route */}
-          <filter id="glow-cyan" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="4" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
         </defs>
 
         {/* Background Grid */}
-        <rect width="100%" height="100%" fill="url(#grid)" />
+        <rect width="100%" height="100%" fill="url(#grid)" pointerEvents="none" />
 
         {/* Pan and Zoom Transform Container */}
         <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
           {/* 1. AS Bounding Containers */}
           {ases.map((as) => (
-            <g key={as.id}>
+            <g
+              key={as.id}
+              data-as-id={as.id}
+              style={{ cursor: isPanning ? 'grabbing' : 'pointer' }}
+            >
               {/* AS Box */}
               <rect
                 x={as.x}
@@ -253,8 +625,6 @@ export default function NetworkTopology({
                 stroke={as.color}
                 strokeWidth={1.5}
                 strokeDasharray="6 4"
-                style={{ cursor: 'pointer' }}
-                onClick={() => setSelectedElement({ type: 'AS', data: as })}
               />
 
               {/* AS Label Header Pill */}
@@ -313,36 +683,41 @@ export default function NetworkTopology({
             const midX = (from.x + to.x) / 2;
             const midY = (from.y + to.y) / 2;
 
-            // Link color based on status and relationship
+            // Link styling
             let strokeColor = '#475569';
-            let strokeWidth = 2.5;
+            let strokeWidth = 2;
+            let dashArray = 'none';
 
             if (isFailed) {
               strokeColor = '#ef4444';
-              strokeWidth = 3;
+              strokeWidth = 2.5;
+              dashArray = '6 4';
             } else if (isBest) {
-              strokeColor = '#38bdf8';
-              strokeWidth = 4;
+              strokeColor = '#2563eb';
+              strokeWidth = 3.5;
             } else if (isAlt) {
               strokeColor = '#818cf8';
-              strokeWidth = 2.5;
+              strokeWidth = 2;
+              dashArray = '5 4';
             } else if (link.relationship === 'peer-peer') {
               strokeColor = '#ec4899';
             } else if (link.relationship === 'provider-customer') {
               strokeColor = '#a855f7';
             } else if (link.relationship === 'customer-provider') {
-              strokeColor = '#38bdf8';
+              strokeColor = '#0284c7';
             } else if (link.relationship === 'internal') {
               strokeColor = '#10b981';
             } else if (link.relationship === 'unassigned') {
               strokeColor = '#64748b';
+              dashArray = '4 4';
             }
 
-            const isUnassigned = link.relationship === 'unassigned';
-            const dashArray = isFailed ? '6 4' : isUnassigned ? '5 5' : 'none';
-
             return (
-              <g key={link.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedElement({ type: 'LINK', data: link })}>
+              <g
+                key={link.id}
+                data-link-id={link.id}
+                style={{ cursor: isPanning ? 'grabbing' : 'pointer' }}
+              >
                 {/* Background Line for easier clicking */}
                 <line
                   x1={from.x}
@@ -362,46 +737,92 @@ export default function NetworkTopology({
                   stroke={strokeColor}
                   strokeWidth={strokeWidth}
                   strokeDasharray={dashArray}
-                  strokeOpacity={isFailed ? 1 : isBest ? 1 : isUnassigned ? 0.6 : 0.75}
+                  strokeOpacity={isFailed ? 1 : isBest ? 1 : 0.8}
                 />
-
-                {/* Animated Dash for BGP Selected Best Route */}
-                {isBest && !isFailed && (
-                  <line
-                    x1={from.x}
-                    y1={from.y}
-                    x2={to.x}
-                    y2={to.y}
-                    stroke="#38bdf8"
-                    strokeWidth={4}
-                    className="flow-active-route"
-                    filter="url(#glow-cyan)"
-                  />
-                )}
 
                 {/* Link Badge in the Middle */}
                 <g transform={`translate(${midX}, ${midY})`}>
-                  <rect
-                    x={-46}
-                    y={-12}
-                    width={92}
-                    height={22}
-                    rx={6}
-                    fill={isFailed ? '#450a0a' : isBest ? '#082f49' : 'rgba(15, 23, 42, 0.9)'}
-                    stroke={isFailed ? '#ef4444' : isBest ? '#38bdf8' : isUnassigned ? '#64748b' : 'var(--border-subtle)'}
-                    strokeWidth={1}
-                  />
-                  <text
-                    x={0}
-                    y={2}
-                    fill={isFailed ? '#fca5a5' : isBest ? '#38bdf8' : isUnassigned ? '#94a3b8' : 'var(--text-secondary)'}
-                    fontSize={10}
-                    fontWeight={600}
-                    fontFamily="var(--font-mono)"
-                    textAnchor="middle"
-                  >
-                    {isFailed ? 'CUT / DOWN' : isUnassigned ? 'UNASSIGNED' : `${link.latencyMs}ms • C:${link.ospfCost}`}
-                  </text>
+                  {(() => {
+                    const isInternal = link.relationship === 'internal';
+                    let badgeText = '';
+                    let badgeWidth = 110;
+
+                    if (isFailed) {
+                      badgeText = 'CUT (WITHDRAWN)';
+                      badgeWidth = 120;
+                    } else if (isInternal) {
+                      badgeText = `OSPF Cost: ${link.ospfCost}`;
+                      badgeWidth = 96;
+                    } else if (link.relationship === 'customer-provider') {
+                      badgeText = `Cust→Prov • ${link.latencyMs}ms`;
+                      badgeWidth = 120;
+                    } else if (link.relationship === 'provider-customer') {
+                      badgeText = `Prov→Cust • ${link.latencyMs}ms`;
+                      badgeWidth = 120;
+                    } else if (link.relationship === 'peer-peer') {
+                      badgeText = `Peer↔Peer • ${link.latencyMs}ms`;
+                      badgeWidth = 118;
+                    } else {
+                      badgeText = `Unassigned • ${link.latencyMs}ms`;
+                      badgeWidth = 118;
+                    }
+
+                    const badgeFill = isFailed
+                      ? '#450a0a'
+                      : isBest
+                      ? '#082f49'
+                      : isInternal
+                      ? '#064e3b'
+                      : 'rgba(15, 23, 42, 0.9)';
+                    const badgeStroke = isFailed
+                      ? '#ef4444'
+                      : isBest
+                      ? '#38bdf8'
+                      : isInternal
+                      ? '#10b981'
+                      : isAlt
+                      ? '#818cf8'
+                      : isUnassigned
+                      ? '#64748b'
+                      : 'var(--border-subtle)';
+                    const badgeColor = isFailed
+                      ? '#fca5a5'
+                      : isBest
+                      ? '#38bdf8'
+                      : isInternal
+                      ? '#6ee7b7'
+                      : isAlt
+                      ? '#a5b4fc'
+                      : isUnassigned
+                      ? '#94a3b8'
+                      : 'var(--text-secondary)';
+
+                    return (
+                      <>
+                        <rect
+                          x={-badgeWidth / 2}
+                          y={-11}
+                          width={badgeWidth}
+                          height={22}
+                          rx={6}
+                          fill={badgeFill}
+                          stroke={badgeStroke}
+                          strokeWidth={1}
+                        />
+                        <text
+                          x={0}
+                          y={3}
+                          fill={badgeColor}
+                          fontSize={9.5}
+                          fontWeight={600}
+                          fontFamily="var(--font-mono)"
+                          textAnchor="middle"
+                        >
+                          {badgeText}
+                        </text>
+                      </>
+                    );
+                  })()}
                 </g>
               </g>
             );
@@ -411,33 +832,96 @@ export default function NetworkTopology({
           {routers.map((router) => {
             const isBest = activeRouterIds.has(router.id);
             const isSelected = selectedElement?.data?.id === router.id;
+            const isSource = router.id === sourceRouterId;
+            const isDest = router.id === destRouterId;
+            const isBeingDragged = activeDraggingId === router.id;
 
             return (
               <g
                 key={router.id}
+                data-router-id={router.id}
                 transform={`translate(${router.x}, ${router.y})`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => setSelectedElement({ type: 'ROUTER', data: router })}
+                style={{ cursor: isBeingDragged ? 'grabbing' : 'grab' }}
               >
-                {/* Router Glow Ring if in active path or selected */}
-                {isBest && (
-                  <circle
-                    r={24}
-                    fill="none"
-                    stroke="var(--accent-cyan)"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 3"
-                    className="flow-active-route"
-                  />
+                {/* Source / Destination Indicator Tag above node */}
+                {isSource && (
+                  <g transform="translate(0, -28)">
+                    <rect
+                      x={-18}
+                      y={-7}
+                      width={36}
+                      height={15}
+                      rx={4}
+                      fill="#064e3b"
+                      stroke="#10b981"
+                      strokeWidth={1}
+                    />
+                    <text
+                      x={0}
+                      y={4}
+                      fill="#6ee7b7"
+                      fontSize={8.5}
+                      fontWeight={800}
+                      textAnchor="middle"
+                      fontFamily="var(--font-mono)"
+                    >
+                      SRC
+                    </text>
+                  </g>
+                )}
+
+                {isDest && (
+                  <g transform="translate(0, -28)">
+                    <rect
+                      x={-22}
+                      y={-7}
+                      width={44}
+                      height={15}
+                      rx={4}
+                      fill="#451a03"
+                      stroke="#f59e0b"
+                      strokeWidth={1}
+                    />
+                    <text
+                      x={0}
+                      y={4}
+                      fill="#fcd34d"
+                      fontSize={8.5}
+                      fontWeight={800}
+                      textAnchor="middle"
+                      fontFamily="var(--font-mono)"
+                    >
+                      DEST
+                    </text>
+                  </g>
                 )}
 
                 {/* Main Node Circle */}
                 <circle
                   r={18}
-                  fill={isSelected ? 'var(--accent-cyan)' : isBest ? '#0284c7' : 'var(--bg-surface)'}
-                  stroke={isSelected ? '#ffffff' : isBest ? '#38bdf8' : 'var(--border-strong)'}
+                  fill={
+                    isSource
+                      ? '#065f46'
+                      : isDest
+                      ? '#78350f'
+                      : isBest
+                      ? '#1e40af'
+                      : isSelected
+                      ? '#2563eb'
+                      : '#1e293b'
+                  }
+                  stroke={
+                    isSource
+                      ? '#10b981'
+                      : isDest
+                      ? '#f59e0b'
+                      : isBest
+                      ? '#3b82f6'
+                      : isSelected
+                      ? '#60a5fa'
+                      : '#475569'
+                  }
                   strokeWidth={2}
-                  filter={isBest ? 'url(#glow-cyan)' : 'none'}
                 />
 
                 {/* Server / Router Icon */}
@@ -445,7 +929,7 @@ export default function NetworkTopology({
                 <text
                   x={0}
                   y={4}
-                  fill={isBest || isSelected ? '#ffffff' : 'var(--text-primary)'}
+                  fill={isBest || isSelected || isSource || isDest ? '#ffffff' : 'var(--text-primary)'}
                   fontSize={11}
                   fontWeight={700}
                   textAnchor="middle"
@@ -478,14 +962,11 @@ export default function NetworkTopology({
             );
           })}
 
-          {/* 4. Animated Packet Marker in Flight (during simulation) */}
+          {/* 4. Packet Marker in Flight (during simulation) */}
           {animatedPacketPos && (
             <g transform={`translate(${animatedPacketPos.x}, ${animatedPacketPos.y})`}>
-              <circle r={14} fill="var(--accent-amber)" opacity={0.3}>
-                <animate attributeName="r" values="8;18;8" dur="1s" repeatCount="indefinite" />
-              </circle>
-              <circle r={9} fill="var(--accent-amber)" stroke="#fff" strokeWidth={2} />
-              <text x={0} y={3} fill="#000" fontSize={8} fontWeight={900} textAnchor="middle">
+              <circle r={10} fill="#f59e0b" stroke="#ffffff" strokeWidth={2} />
+              <text x={0} y={3} fill="#000" fontSize={8} fontWeight={800} textAnchor="middle">
                 IP
               </text>
             </g>

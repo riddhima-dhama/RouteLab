@@ -23,7 +23,7 @@ export function buildPacketTraceSteps({
     const src = routerMap.get(sourceRouter);
     return {
       status: 'DROPPED',
-      reason: `No BGP Route from ${sourceRouter} to ${destRouter} (Network Unreachable)`,
+      reason: `No BGP Route from ${sourceRouter} to ${destRouter} (Destination Unreachable)`,
       packetId,
       steps: [
         {
@@ -34,8 +34,8 @@ export function buildPacketTraceSteps({
           ttlRemaining: currentTtl,
           delayMs: 0,
           action: 'LOOKUP_FAILED',
-          status: 'DROP',
-          notes: `No viable BGP route to ${destRouter} in Loc-RIB. ICMP Type 3 Code 0 (Net Unreachable) generated.`,
+          status: 'DEST_UNREACHABLE',
+          notes: `No viable BGP route to ${destRouter} in Loc-RIB. ICMP Type 3 Code 0 (Destination Network Unreachable) generated.`,
         },
       ],
     };
@@ -59,8 +59,8 @@ export function buildPacketTraceSteps({
         egressInterface: `eth1 (to ${routerPath[1] || 'DEST'})`,
         ttlRemaining: currentTtl,
         delayMs: cumulativeDelay,
-        action: 'ORIGINATED',
-        status: 'FORWARDED',
+        action: 'PACKET_CREATED',
+        status: 'CREATED',
         notes: `IP packet (${packetSize} Bytes) injected at origin router ${rId} in ${asId} targeted for ${destRouter} with TTL=${currentTtl}`,
       });
       continue;
@@ -84,7 +84,7 @@ export function buildPacketTraceSteps({
         ttlRemaining: currentTtl,
         delayMs: cumulativeDelay,
         action: 'LINK_FAILURE_DROP',
-        status: 'DROP',
+        status: 'DROPPED',
         notes: `Next-hop interface link ${linkBetween.id} is down! Dropped with ICMP Type 3 Code 1 (Host Unreachable).`,
       });
 
@@ -110,7 +110,7 @@ export function buildPacketTraceSteps({
         ttlRemaining: 0,
         delayMs: cumulativeDelay,
         action: 'TTL_EXPIRED',
-        status: 'DROP',
+        status: 'TTL_EXPIRED',
         notes: `TTL reached 0 at router ${rId}! Packet dropped. ICMP Type 11 Code 0 (Time to Live Exceeded in Transit) returned.`,
       });
 
@@ -138,7 +138,7 @@ export function buildPacketTraceSteps({
         ttlRemaining: currentTtl,
         delayMs: cumulativeDelay,
         action: 'DELIVERED',
-        status: 'SUCCESS',
+        status: 'DELIVERED',
         notes: `Packet successfully arrived at destination router ${rId} in ${asId} after ${i} hops!`,
       });
 

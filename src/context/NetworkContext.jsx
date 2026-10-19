@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useMemo, useCallback, useEffect } from 'react';
 import {
   DEFAULT_ASES,
   DEFAULT_ROUTERS,
@@ -11,6 +11,7 @@ import {
   MOCK_ROUTING_EVENTS,
 } from '../data/mockMetrics.js';
 import { calculateBgpRoutes } from '../engine/bgpEngine.js';
+import api from '../services/api.js';
 
 const NetworkContext = createContext(null);
 
@@ -28,6 +29,39 @@ export function NetworkProvider({ children }) {
   const [logs, setLogs] = useState(MOCK_ROUTING_EVENTS);
   const [packetHistory, setPacketHistory] = useState([]);
   const [toast, setToast] = useState(null); // { type: 'success'|'error'|'info'|'warning', message: string }
+
+  // Dynamic failure tracking
+  const [previousRoute, setPreviousRoute] = useState(null);
+  const [lastFailedLink, setLastFailedLink] = useState(null);
+
+  // Backend connection status
+  const [backendStatus, setBackendStatus] = useState({
+    connected: false,
+    checked: false,
+    baseUrl: api.getBaseUrl(),
+    error: null,
+  });
+
+  const checkBackendHealth = useCallback(async () => {
+    try {
+      const res = await api.checkHealth();
+      setBackendStatus({
+        connected: res.connected,
+        checked: true,
+        baseUrl: api.getBaseUrl(),
+        error: res.error || null,
+      });
+      return res;
+    } catch (e) {
+      setBackendStatus({
+        connected: false,
+        checked: true,
+        baseUrl: api.getBaseUrl(),
+        error: e.message,
+      });
+      return { connected: false, error: e.message };
+    }
+  }, []);
 
   // Show temporary toast notification
   const notify = useCallback((message, type = 'info') => {
@@ -64,6 +98,11 @@ export function NetworkProvider({ children }) {
 
   // Toggle link status (ACTIVE <-> FAILED)
   const toggleLinkStatus = useCallback((linkId) => {
+    // Record route right before the link change for failover comparison
+    if (bgpResult?.bestRoute) {
+      setPreviousRoute(bgpResult.bestRoute);
+    }
+
     setLinks((prevLinks) => {
       const target = prevLinks.find((l) => l.id === linkId);
       if (!target) return prevLinks;
@@ -74,6 +113,7 @@ export function NetworkProvider({ children }) {
       );
 
       if (newStatus === 'FAILED') {
+        setLastFailedLink(target);
         notify(`Link ${linkId} (${target.fromAs} ↔ ${target.toAs}) went DOWN! BGP WITHDRAWAL sent.`, 'error');
         addLog(
           'BGP_WITHDRAW',
@@ -91,9 +131,16 @@ export function NetworkProvider({ children }) {
         );
       }
 
+      // If backend is connected, notify backend
+      if (backendStatus.connected) {
+        api.toggleLink(linkId, newStatus).catch((err) => {
+          console.warn('[RouteLab] Backend toggleLink error:', err.message);
+        });
+      }
+
       return updated;
     });
-  }, [notify, addLog]);
+  }, [bgpResult, notify, addLog, backendStatus.connected]);
 
   // Set link status explicitly
   const setLinkStatus = useCallback((linkId, status) => {
@@ -148,6 +195,13 @@ export function NetworkProvider({ children }) {
     addLog('ROUTER_ADD', `Router ${newRouter.id} created with IP ${newRouter.ip}`, newRouter.asId, 'info');
   }, [notify, addLog]);
 
+  // Update router coordinate position (for node dragging)
+  const updateRouterPosition = useCallback((routerId, x, y) => {
+    setRouters((prev) =>
+      prev.map((r) => (r.id === routerId ? { ...r, x: Math.round(x), y: Math.round(y) } : r))
+    );
+  }, []);
+
   // Delete router
   const deleteRouter = useCallback((routerId) => {
     setRouters((prev) => prev.filter((r) => r.id !== routerId));
@@ -180,9 +234,29 @@ export function NetworkProvider({ children }) {
     setDestAs('AS4');
     setSelectedElement(null);
     setAlerts(MOCK_ALERTS);
+    setPreviousRoute(null);
+    setLastFailedLink(null);
     notify('Network topology and policies reset to default presentation scenario', 'info');
     addLog('SYSTEM_RESET', 'Network state restored to factory baseline topology', 'CORE', 'info');
   }, [notify, addLog]);
+
+  // Check backend health on mount
+  useEffect(() => {
+    let isMounted = true;
+    api.checkHealth().then((res) => {
+      if (isMounted) {
+        setBackendStatus({
+          connected: res.connected,
+          checked: true,
+          baseUrl: api.getBaseUrl(),
+          error: res.error || null,
+        });
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Clear all roles and link relationships so nothing is assigned automatically
   const clearAllAssignments = useCallback(() => {
@@ -262,6 +336,12 @@ export function NetworkProvider({ children }) {
     selectedElement,
     setSelectedElement,
     bgpResult,
+    previousRoute,
+    setPreviousRoute,
+    lastFailedLink,
+    setLastFailedLink,
+    backendStatus,
+    checkBackendHealth,
     alerts,
     logs,
     packetHistory,
@@ -275,6 +355,7 @@ export function NetworkProvider({ children }) {
     updateAsRole,
     setAsLocalPref,
     addRouter,
+    updateRouterPosition,
     deleteRouter,
     addLink,
     deleteLink,

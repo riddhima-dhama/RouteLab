@@ -11,9 +11,10 @@
 export function computeRoutePerformance(route) {
   if (!route) {
     return {
-      latencyMs: 0,
       bandwidthMbps: 0,
       throughputMbps: 0,
+      delayMs: 0,
+      latencyMs: 0,
       hopCount: 0,
       asCount: 0,
       pdr: 0,
@@ -35,21 +36,28 @@ export function computeRoutePerformance(route) {
     }
   });
 
+  const hopCount = route.routerPath ? route.routerPath.length - 1 : 0;
+  // Latency = physical propagation time (ms)
+  const latencyMs = totalLatency;
+  // Delay = total end-to-end time (propagation + hop transmission & queuing delay, ~1.5ms per hop)
+  const delayMs = Math.round((latencyMs + hopCount * 1.5) * 10) / 10;
+
   // Effective throughput is limited by bottleneck bandwidth and RTT (BDP - Bandwidth Delay Product)
   const bdpKbits = minBandwidth * totalLatency;
-  // Typical realistic throughput with BGP protocol overhead and buffer efficiency (~85-94% of bottleneck)
+  // Typical realistic throughput with BGP protocol overhead and buffer efficiency (~88% of bottleneck)
   const throughputMbps = Math.round(minBandwidth * 0.88 * 10) / 10;
   const pdr = 99.8; // Baseline when route is healthy
   const packetLossPercent = 0.2;
   const utilizationPercent = Math.min(95, Math.round((throughputMbps / minBandwidth) * 100));
 
   return {
-    latencyMs: totalLatency,
     bandwidthMbps: minBandwidth,
     throughputMbps,
+    delayMs,
+    latencyMs,
     bdpKbits,
     totalOspfCost: totalCost,
-    hopCount: route.routerPath ? route.routerPath.length - 1 : 0,
+    hopCount,
     asCount: route.asPath ? route.asPath.length : 0,
     pdr,
     packetLossPercent,
@@ -80,8 +88,9 @@ export function compareRoutingCandidates(allRoutes = []) {
       isWinner: true,
       route: bgpBest,
       asPathStr: bgpBest.asPath.join(' → '),
-      hops: bgpBest.asPathLength,
+      hops: bgpBest.asPathLength - 1,
       latencyMs: bgpBest.totalLatencyMs,
+      delayMs: Math.round((bgpBest.totalLatencyMs + (bgpBest.routerPath?.length || 3) * 1.5) * 10) / 10,
       bandwidthMbps: bgpBest.bottleneckBandwidthMbps,
       throughputMbps: Math.round(bgpBest.bottleneckBandwidthMbps * 0.88),
       pdr: 99.8,
@@ -95,8 +104,9 @@ export function compareRoutingCandidates(allRoutes = []) {
             isWinner: false,
             route: bgpAlt,
             asPathStr: bgpAlt.asPath.join(' → '),
-            hops: bgpAlt.asPathLength,
+            hops: bgpAlt.asPathLength - 1,
             latencyMs: bgpAlt.totalLatencyMs,
+            delayMs: Math.round((bgpAlt.totalLatencyMs + (bgpAlt.routerPath?.length || 3) * 1.5) * 10) / 10,
             bandwidthMbps: bgpAlt.bottleneckBandwidthMbps,
             throughputMbps: Math.round(bgpAlt.bottleneckBandwidthMbps * 0.88),
             pdr: 99.4,
@@ -110,8 +120,9 @@ export function compareRoutingCandidates(allRoutes = []) {
       isWinner: shortestCost.id === bgpBest.id,
       route: shortestCost,
       asPathStr: shortestCost.asPath.join(' → '),
-      hops: shortestCost.asPathLength,
+      hops: shortestCost.asPathLength - 1,
       latencyMs: shortestCost.totalLatencyMs,
+      delayMs: Math.round((shortestCost.totalLatencyMs + (shortestCost.routerPath?.length || 3) * 1.5) * 10) / 10,
       bandwidthMbps: shortestCost.bottleneckBandwidthMbps,
       throughputMbps: Math.round(shortestCost.bottleneckBandwidthMbps * 0.9),
       pdr: 99.9,
@@ -132,6 +143,7 @@ export function simulateTcpRounds({
   initialSsthresh = 32,
   dropAtRound = 10,
   hasLoss = true,
+  lossType = 'fast_retransmit', // 'fast_retransmit' (3 Dup ACKs -> ssthresh) or 'timeout' (RTO -> 1 MSS)
 }) {
   const data = [];
   let cwnd = 1; // 1 MSS
@@ -141,18 +153,32 @@ export function simulateTcpRounds({
   for (let r = 1; r <= numRounds; r++) {
     // Check if loss event triggered at this round
     if (hasLoss && r === dropAtRound) {
-      // Packet drop event! Triple duplicate ACK triggers Fast Retransmit / Fast Recovery
-      phase = 'Fast Recovery / Retransmit';
       ssthresh = Math.max(2, Math.floor(cwnd / 2));
-      cwnd = ssthresh; // Fast recovery sets cwnd to ssthresh
-      data.push({
-        round: r,
-        cwnd: Math.round(cwnd * 10) / 10,
-        ssthresh,
-        phase,
-        event: 'Packet Loss (3 Dup ACKs)',
-        throughput: Math.round(cwnd * 14.6),
-      });
+      if (lossType === 'timeout') {
+        // RTO Timeout: severe loss or link severed during routing convergence -> cwnd drops to 1 MSS
+        phase = 'RTO Timeout (Slow Start Restart)';
+        cwnd = 1;
+        data.push({
+          round: r,
+          cwnd: 1,
+          ssthresh,
+          phase,
+          event: 'RTO Timeout (Link Flap/Unreachable): cwnd -> 1 MSS',
+          throughput: Math.round(cwnd * 14.6),
+        });
+      } else {
+        // Fast Retransmit / Fast Recovery: 3 Duplicate ACKs received
+        phase = 'Fast Recovery / Retransmit';
+        cwnd = ssthresh; // In Fast Recovery cwnd resumes at ssthresh
+        data.push({
+          round: r,
+          cwnd: Math.round(cwnd * 10) / 10,
+          ssthresh,
+          phase,
+          event: 'Packet Loss (3 Dup ACKs): Fast Retransmit (cwnd = ssthresh)',
+          throughput: Math.round(cwnd * 14.6),
+        });
+      }
       continue;
     }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, CheckCircle, XCircle, ArrowRight } from 'lucide-react';
+import { Download, CheckCircle, XCircle, ArrowRight, Clock, AlertOctagon } from 'lucide-react';
 import { exportToCSV } from '../utils/exportCSV.js';
 
 export default function PacketTraceTable({ steps = [], currentActiveHop = null, packetId = 1 }) {
@@ -58,8 +58,6 @@ export default function PacketTraceTable({ steps = [], currentActiveHop = null, 
           <tbody>
             {steps.map((step, idx) => {
               const isCurrent = currentActiveHop !== null && step.hopIndex === currentActiveHop;
-              const isDrop = step.status === 'DROP';
-              const isSuccess = step.status === 'SUCCESS';
 
               return (
                 <tr
@@ -105,19 +103,34 @@ export default function PacketTraceTable({ steps = [], currentActiveHop = null, 
                     </span>
                   </td>
                   <td>
-                    {isSuccess && (
-                      <span className="badge badge-green">
+                    {step.status === 'CREATED' && (
+                      <span className="badge badge-cyan" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <ArrowRight size={11} /> CREATED
+                      </span>
+                    )}
+                    {step.status === 'FORWARDED' && (
+                      <span className="badge badge-cyan" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <ArrowRight size={11} /> FORWARDED
+                      </span>
+                    )}
+                    {(step.status === 'DELIVERED' || step.status === 'SUCCESS') && (
+                      <span className="badge badge-green" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <CheckCircle size={11} /> DELIVERED
                       </span>
                     )}
-                    {isDrop && (
-                      <span className="badge badge-red">
+                    {(step.status === 'DROPPED' || step.status === 'DROP') && (
+                      <span className="badge badge-red" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <XCircle size={11} /> DROPPED
                       </span>
                     )}
-                    {!isSuccess && !isDrop && (
-                      <span className="badge badge-cyan">
-                        <ArrowRight size={11} /> FORWARDED
+                    {step.status === 'TTL_EXPIRED' && (
+                      <span className="badge badge-amber" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <Clock size={11} /> TTL EXPIRED
+                      </span>
+                    )}
+                    {(step.status === 'DEST_UNREACHABLE' || step.status === 'UNREACHABLE') && (
+                      <span className="badge badge-red" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <AlertOctagon size={11} /> UNREACHABLE
                       </span>
                     )}
                   </td>

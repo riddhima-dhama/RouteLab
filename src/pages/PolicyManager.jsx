@@ -7,6 +7,7 @@ import {
   Radio,
   FileCode,
   Sliders,
+  Layers,
 } from 'lucide-react';
 import { EXPORT_RULES, verifyAsPathLoop, generateBgpMessage } from '../engine/policyEngine.js';
 
@@ -17,6 +18,7 @@ export default function PolicyManager() {
     updateLinkRelationship,
     setAsLocalPref,
     notify,
+    bgpResult,
   } = useNetwork();
 
   // Loop tester interactive state
@@ -213,6 +215,135 @@ export default function PolicyManager() {
         </div>
       </div>
 
+      {/* Route States Ledger (Accepted, Rejected, Selected, Withdrawn) */}
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">
+            <Layers size={18} color="var(--accent-cyan)" />
+            <span>BGP Route States & Decision Ledger</span>
+          </div>
+          <span className="badge badge-cyan">4 ROUTE LIFECYCLE STATES</span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
+          {/* 1. Selected Routes */}
+          <div
+            style={{
+              padding: '12px 14px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>LOC-RIB (FORWARDING)</span>
+              <span className="badge badge-cyan">SELECTED</span>
+            </div>
+            {bgpResult?.bestRoute ? (
+              <div>
+                <div className="text-mono" style={{ color: 'var(--accent-cyan)', fontWeight: 700, fontSize: '0.85rem' }}>
+                  {bgpResult.bestRoute.asPath.join(' → ')}
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  Installed into forwarding table via next-hop {bgpResult.bestRoute.nextHopAs} (Local-Pref {bgpResult.bestRoute.localPref}).
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No path currently selected.</div>
+            )}
+          </div>
+
+          {/* 2. Accepted Routes */}
+          <div
+            style={{
+              padding: '12px 14px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>ADJ-RIB-IN (ELIGIBLE)</span>
+              <span className="badge badge-green">ACCEPTED</span>
+            </div>
+            {bgpResult?.validRoutes && bgpResult.validRoutes.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {bgpResult.validRoutes.map((r) => (
+                  <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span className="text-mono" style={{ fontSize: '0.78rem', color: '#f1f5f9' }}>
+                      {r.asPath.join(' → ')}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Pref {r.localPref}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No candidate routes accepted.</div>
+            )}
+          </div>
+
+          {/* 3. Rejected Routes */}
+          <div
+            style={{
+              padding: '12px 14px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>POLICY / LOOP VIOLATION</span>
+              <span className="badge badge-red">REJECTED</span>
+            </div>
+            {bgpResult?.rejectedRoutes && bgpResult.rejectedRoutes.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {bgpResult.rejectedRoutes.slice(0, 3).map((r, i) => (
+                  <div key={i}>
+                    <span className="text-mono" style={{ fontSize: '0.76rem', color: '#fca5a5' }}>
+                      {r.asPath.join(' → ')}
+                    </span>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                      {r.reason}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>0 rejected routes.</div>
+            )}
+          </div>
+
+          {/* 4. Withdrawn Routes */}
+          <div
+            style={{
+              padding: '12px 14px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>BGP WITHDRAWAL</span>
+              <span className="badge badge-amber">WITHDRAWN</span>
+            </div>
+            {links.some((l) => l.status === 'FAILED') ? (
+              <div>
+                <div style={{ fontSize: '0.78rem', color: '#fcd34d', fontWeight: 600 }}>
+                  Link {links.find((l) => l.status === 'FAILED')?.id} severed
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  All routes traversing failed interface withdrawn via BGP UPDATE (NLRI removed).
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                No active withdrawals. All peering links healthy.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Interactive Loop Detection & UPDATE Message Simulator */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
         {/* AS Loop Prevention Tester */}
@@ -225,12 +356,12 @@ export default function PolicyManager() {
           </div>
 
           <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-            Enter an AS-PATH sequence and receiver ASN to test whether BGP loop prevention detects and rejects the route:
+            Enter a received AS-PATH sequence and receiver ASN to test whether BGP loop prevention detects and rejects the route:
           </p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <div>
-              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Simulated AS-PATH Sequence</label>
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Received AS-PATH Sequence</label>
               <input
                 type="text"
                 value={testAsPathInput}
@@ -268,10 +399,33 @@ export default function PolicyManager() {
                   fontSize: '0.82rem',
                 }}
               >
-                <div style={{ fontWeight: 700, color: loopCheckResult.hasLoop ? '#fca5a5' : '#86efac', marginBottom: '4px' }}>
-                  {loopCheckResult.hasLoop ? '⚠️ ROUTE REJECTED (LOOP DETECTED)' : '✓ ROUTE ACCEPTED (LOOP-FREE)'}
+                <div style={{ fontWeight: 700, color: loopCheckResult.hasLoop ? '#fca5a5' : '#86efac', marginBottom: '6px' }}>
+                  {loopCheckResult.hasLoop ? '⚠️ ROUTE REJECTED (AS LOOP DETECTED)' : '✓ ROUTE ACCEPTED (LOOP-FREE)'}
                 </div>
-                <div style={{ color: 'var(--text-primary)' }}>{loopCheckResult.message}</div>
+                {/* Visual AS Path representation */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                  {loopCheckResult.asPath.map((asn, idx) => {
+                    const isOffending = Number(asn) === Number(loopCheckResult.receivingAsn);
+                    return (
+                      <span
+                        key={idx}
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          fontSize: '0.75rem',
+                          fontFamily: 'var(--font-mono)',
+                          fontWeight: 700,
+                          backgroundColor: isOffending ? 'rgba(239, 68, 68, 0.3)' : 'rgba(56, 189, 248, 0.15)',
+                          border: `1px solid ${isOffending ? '#ef4444' : 'rgba(56, 189, 248, 0.4)'}`,
+                          color: isOffending ? '#fca5a5' : '#e0f2fe',
+                        }}
+                      >
+                        AS{asn} {isOffending ? '(MATCH!)' : ''}
+                      </span>
+                    );
+                  })}
+                </div>
+                <div style={{ color: 'var(--text-primary)', lineHeight: 1.4 }}>{loopCheckResult.message}</div>
               </div>
             )}
           </div>

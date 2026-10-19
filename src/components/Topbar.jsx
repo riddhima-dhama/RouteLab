@@ -1,143 +1,198 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   RotateCcw,
-  AlertOctagon,
+  Network,
+  GitFork,
+  Send,
+  Activity,
   ArrowRight,
 } from 'lucide-react';
 import { useNetwork } from '../context/NetworkContext.jsx';
 
-export default function Topbar({ activeTab }) {
+export default function Topbar({ activeTab, setActiveTab }) {
   const {
     ases,
     sourceAs,
     setSourceAs,
     destAs,
     setDestAs,
-    bgpResult,
-    links,
-    toggleLinkStatus,
     resetNetworkToDefault,
+    backendStatus,
+    checkBackendHealth,
+    notify,
   } = useNetwork();
 
-  const as3As5Link = links.find((l) => l.id === 'L-3-5');
-  const isL3Down = as3As5Link?.status === 'FAILED';
+  const [isCheckingBackend, setIsCheckingBackend] = useState(false);
 
-  const titles = {
-    dashboard: 'Dashboard',
-    topology: 'Network Topology',
-    simulator: 'Packet Simulator',
-    failure: 'Link Failure & Failover',
-    performance: 'Performance Analysis',
-    transport: 'TCP / UDP Simulation',
+  const handleCheckBackend = async () => {
+    setIsCheckingBackend(true);
+    const res = await checkBackendHealth();
+    setIsCheckingBackend(false);
+    if (res?.connected) {
+      notify(`Connected to backend API at ${backendStatus.baseUrl}`, 'success');
+    } else {
+      notify(`Backend API offline. Operating in standalone simulation mode.`, 'info');
+    }
   };
+
+  const navItems = [
+    { id: 'topology', label: 'Topology', icon: Network },
+    { id: 'bgp-routing', label: 'BGP Routing', icon: GitFork },
+    { id: 'simulator', label: 'Packet Simulator', icon: Send },
+    { id: 'performance-failures', label: 'Performance & Failures', icon: Activity },
+  ];
 
   return (
     <header
       style={{
-        height: '56px',
         backgroundColor: 'var(--bg-secondary)',
         borderBottom: '1px solid var(--border-subtle)',
+        padding: '0 20px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '0 20px',
-        zIndex: 40,
+        height: '54px',
+        userSelect: 'none',
+        flexShrink: 0,
         gap: '16px',
+        flexWrap: 'wrap',
       }}
     >
-      {/* Left: Page Title */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <h1 style={{ fontSize: '1rem', fontWeight: 600, color: '#f1f5f9' }}>
-          {titles[activeTab] || 'RouteLab'}
-        </h1>
+      {/* Brand */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <span style={{ fontSize: '1.05rem', fontWeight: 700, letterSpacing: '-0.02em', color: '#f8fafc' }}>
+          RouteLab
+        </span>
+        <span
+          style={{
+            fontSize: '0.7rem',
+            color: 'var(--text-muted)',
+            padding: '2px 6px',
+            borderRadius: '4px',
+            backgroundColor: 'var(--bg-surface)',
+            border: '1px solid var(--border-subtle)',
+            fontFamily: 'var(--font-mono)',
+          }}
+        >
+          BGP Route Analyzer
+        </span>
       </div>
 
-      {/* Center: Source & Destination Selector + Current Route */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          backgroundColor: 'var(--bg-surface)',
-          padding: '4px 10px',
-          borderRadius: 'var(--radius-sm)',
-          border: '1px solid var(--border-subtle)',
-        }}
-      >
-        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>From:</span>
-        <select
-          value={sourceAs}
-          onChange={(e) => setSourceAs(e.target.value)}
-          className="select-field"
-          style={{ padding: '2px 6px', fontSize: '0.78rem' }}
+      {/* 4 Main Navigation Tabs */}
+      <nav style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '7px',
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: '0.82rem',
+                fontWeight: isActive ? 600 : 500,
+                color: isActive ? '#ffffff' : 'var(--text-secondary)',
+                backgroundColor: isActive ? 'var(--accent-blue)' : 'transparent',
+                border: '1px solid',
+                borderColor: isActive ? 'var(--accent-blue)' : 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.color = '#f1f5f9';
+                  e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }
+              }}
+            >
+              <Icon size={14} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Right Controls: Source -> Dest AS, Backend Status, Reset */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        {/* Endpoints Select */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            backgroundColor: 'var(--bg-surface)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '3px 8px',
+            fontSize: '0.75rem',
+          }}
         >
-          {ases.map((a) => (
-            <option key={a.id} value={a.id}>{a.id}</option>
-          ))}
-        </select>
-
-        <ArrowRight size={13} color="var(--text-muted)" />
-
-        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>To:</span>
-        <select
-          value={destAs}
-          onChange={(e) => setDestAs(e.target.value)}
-          className="select-field"
-          style={{ padding: '2px 6px', fontSize: '0.78rem' }}
-        >
-          {ases.map((a) => (
-            <option key={a.id} value={a.id}>{a.id}</option>
-          ))}
-        </select>
-
-        {/* Selected Route Display */}
-        {bgpResult?.bestRoute ? (
-          <div
-            style={{
-              marginLeft: '6px',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'rgba(59, 130, 246, 0.1)',
-              border: '1px solid rgba(59, 130, 246, 0.25)',
-              fontSize: '0.75rem',
-              fontFamily: 'var(--font-mono)',
-              color: '#60a5fa',
-              fontWeight: 600,
-            }}
+          <span style={{ color: 'var(--text-muted)' }}>Src:</span>
+          <select
+            value={sourceAs}
+            onChange={(e) => setSourceAs(e.target.value)}
+            className="select-field"
+            style={{ padding: '2px 4px', fontSize: '0.75rem', border: 'none', background: 'transparent' }}
           >
-            {bgpResult.bestRoute.asPath.join(' → ')}
-          </div>
-        ) : (
-          <div
-            style={{
-              marginLeft: '6px',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid rgba(239, 68, 68, 0.25)',
-              fontSize: '0.75rem',
-              color: '#f87171',
-            }}
-          >
-            No Route
-          </div>
-        )}
-      </div>
+            {ases.map((a) => (
+              <option key={a.id} value={a.id}>{a.id}</option>
+            ))}
+          </select>
 
-      {/* Right: Quick Action Controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <ArrowRight size={12} color="var(--text-muted)" />
+
+          <span style={{ color: 'var(--text-muted)' }}>Dst:</span>
+          <select
+            value={destAs}
+            onChange={(e) => setDestAs(e.target.value)}
+            className="select-field"
+            style={{ padding: '2px 4px', fontSize: '0.75rem', border: 'none', background: 'transparent' }}
+          >
+            {ases.map((a) => (
+              <option key={a.id} value={a.id}>{a.id}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Backend Status Indicator */}
         <button
-          onClick={() => toggleLinkStatus('L-3-5')}
-          className={`btn btn-sm ${isL3Down ? 'btn-danger' : 'btn-secondary'}`}
+          onClick={handleCheckBackend}
+          disabled={isCheckingBackend}
+          className="btn btn-sm btn-outline"
+          style={{
+            fontSize: '0.72rem',
+            padding: '3px 8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+          title="Click to check connection to backend server"
         >
-          <AlertOctagon size={14} />
-          <span>{isL3Down ? 'Restore AS3–AS5' : 'Cut AS3–AS5'}</span>
+          <span
+            className="status-dot"
+            style={{
+              backgroundColor: backendStatus.connected ? 'var(--accent-emerald)' : 'var(--text-muted)',
+            }}
+          />
+          <span>{backendStatus.connected ? 'API Online' : 'Local Engine'}</span>
         </button>
 
+        {/* Reset State Button */}
         <button
           onClick={resetNetworkToDefault}
           className="btn btn-sm btn-outline"
-          title="Reset"
+          style={{ padding: '4px 8px', fontSize: '0.74rem' }}
+          title="Reset network to default classroom scenario"
         >
           <RotateCcw size={13} />
           <span>Reset</span>

@@ -2,10 +2,13 @@ import React from 'react';
 import {
   LayoutDashboard,
   Network,
+  GitFork,
+  ShieldCheck,
   Send,
   Activity,
   AlertTriangle,
   Zap,
+  FileText,
   ChevronLeft,
   ChevronRight,
   Globe,
@@ -18,11 +21,14 @@ export default function Sidebar({ activeTab, setActiveTab, collapsed, setCollaps
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'topology', label: 'Topology', icon: Network },
+    { id: 'topology', label: 'Network Topology', icon: Network },
+    { id: 'bgp-routing', label: 'BGP Routing', icon: GitFork },
+    { id: 'policies', label: 'BGP Policies', icon: ShieldCheck },
     { id: 'simulator', label: 'Packet Simulator', icon: Send },
-    { id: 'failure', label: 'Failure & Reroute', icon: AlertTriangle, alert: hasFailedLink },
-    { id: 'performance', label: 'Performance', icon: Activity },
-    { id: 'transport', label: 'TCP / UDP', icon: Zap },
+    { id: 'performance', label: 'Performance Analyzer', icon: Activity },
+    { id: 'dynamic-routing', label: 'Dynamic Routing', icon: AlertTriangle, alert: hasFailedLink },
+    { id: 'transport', label: 'TCP/UDP Analysis', icon: Zap },
+    { id: 'events', label: 'Simulation Events', icon: FileText },
   ];
 
   return (
@@ -81,7 +87,10 @@ export default function Sidebar({ activeTab, setActiveTab, collapsed, setCollaps
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = activeTab === item.id;
+            const isActive =
+              activeTab === item.id ||
+              (item.id === 'dynamic-routing' && activeTab === 'failure') ||
+              (item.id === 'bgp-routing' && activeTab === 'routing');
 
             return (
               <button

@@ -1,54 +1,44 @@
 import React, { useState } from 'react';
 import { NetworkProvider, useNetwork } from './context/NetworkContext.jsx';
-import Sidebar from './components/Sidebar.jsx';
 import Topbar from './components/Topbar.jsx';
 
-import Dashboard from './pages/Dashboard.jsx';
 import TopologyPage from './pages/TopologyPage.jsx';
+import RouteAnalysis from './pages/RouteAnalysis.jsx';
 import PacketSimulatorPage from './pages/PacketSimulatorPage.jsx';
-import FailureSimulation from './pages/FailureSimulation.jsx';
-import PerformanceAnalyzerPage from './pages/PerformanceAnalyzerPage.jsx';
-import TransportAnalysis from './pages/TransportAnalysis.jsx';
+import PerformanceFailuresPage from './pages/PerformanceFailuresPage.jsx';
+
 import { CheckCircle2, AlertOctagon, Info, AlertTriangle } from 'lucide-react';
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeTab, setActiveTab] = useState('topology');
   const { toast } = useNetwork();
 
   const renderCurrentPage = () => {
     switch (activeTab) {
-      case 'dashboard':
-        return <Dashboard setActiveTab={setActiveTab} />;
       case 'topology':
         return <TopologyPage />;
+      case 'bgp-routing':
+      case 'routing':
+        return <RouteAnalysis />;
       case 'simulator':
         return <PacketSimulatorPage />;
-      case 'failure':
-        return <FailureSimulation />;
+      case 'performance-failures':
       case 'performance':
-        return <PerformanceAnalyzerPage />;
-      case 'transport':
-        return <TransportAnalysis />;
+      case 'failure':
+      case 'dynamic-routing':
+        return <PerformanceFailuresPage />;
       default:
-        return <Dashboard setActiveTab={setActiveTab} />;
+        return <TopologyPage />;
     }
   };
 
   return (
     <div className="app-container">
-      {/* Navigation Sidebar */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        collapsed={sidebarCollapsed}
-        setCollapsed={setSidebarCollapsed}
-      />
+      {/* Top Navigation Bar with 4 Core Sections */}
+      <Topbar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      {/* Main App Layout */}
+      {/* Main Content Area */}
       <div className="main-content">
-        <Topbar activeTab={activeTab} />
-
         <main className="page-scroll-area">
           {renderCurrentPage()}
         </main>
